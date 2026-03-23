@@ -18,14 +18,14 @@ func main() {
 	}
 
 	dsn := os.Getenv("DB_DNS")
-	if dns == "" {
-		dns = "host=localhost port=5432 user=postgres password=postgres dbname=avito_rooms sslmode=disable"
+	if dsn == "" {
+		dsn = "host=localhost port=5432 user=postgres password=123456 dbname=avito_rooms sslmode=disable"
 	}
 
-	db, err := aql.Open("postgress", dsn)
-	if err != nil (
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
 		log.Fatal("sql.Open:", err)
-	)
+	}
 	defer db.Close()
 
 	if err := db.Ping(); err != nil {

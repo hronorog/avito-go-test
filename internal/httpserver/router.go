@@ -1,10 +1,13 @@
 package httpserver
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
 	"github.com/hronorog/avito-go-test/internal/auth"
+	"github.com/hronorog/avito-go-test/internal/repo"
+	"github.com/hronorog/avito-go-test/internal/service"
 )
 
 type DummyLoginRequest struct {
@@ -20,18 +23,24 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-func New() http.Handler {
+func New(db *sql.DB) http.Handler {
+	r := repo.New(db)
+	s := service.New(r)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/_info", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.Health(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "db not available")
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	mux.HandleFunc("/dummyLogin", dummyLoginHandler)
-	protected := auth.Middleware(mux)
 
-	return protected
+	return auth.Middleware(mux)
 }
 
 func dummyLoginHandler(w http.ResponseWriter, r *http.Request) {
