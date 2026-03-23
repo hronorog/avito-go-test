@@ -18,7 +18,7 @@ func main() {
 	}
 
 	dsn := os.Getenv("DB_DNS")
-	id dns == "" {
+	if dns == "" {
 		dns = "host=localhost port=5432 user=postgres password=postgres dbname=avito_rooms sslmode=disable"
 	}
 
