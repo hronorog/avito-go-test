@@ -3,19 +3,21 @@ package httpserver
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/hronorog/avito-go-test/internal/auth"
 )
 
 type DummyLoginRequest struct {
-	Login string `json:"login"`
-	Role  string `json:"role"`
+	Role string `json:"role"`
 }
 
-type DummyLoginResponse struct {
+type TokenResponse struct {
 	Token string `json:"token"`
+}
+
+type ErrorResponse struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func New() http.Handler {
@@ -27,8 +29,9 @@ func New() http.Handler {
 	})
 
 	mux.HandleFunc("/dummyLogin", dummyLoginHandler)
+	protected := auth.Middleware(mux)
 
-	return mux
+	return protected
 }
 
 func dummyLoginHandler(w http.ResponseWriter, r *http.Request) {
@@ -39,34 +42,32 @@ func dummyLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req DummyLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json")
 		return
 	}
 
-	//TODO: подключение к бд потом
-	userID := int64(1)
-
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "dev-secret"
+	if req.Role != "admin" && req.Role != "user" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "role must be 'admin' or 'user'")
+		return
 	}
 
-	claims := jwt.MapClaims{
-		"user_id": userID,
-		"role":    req.Role,
-		"login":   req.Login,
-		"exp":     time.Now().Add(24 * time.Hour).Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(secret))
+	token, _, err := auth.GenerateToken(req.Role)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate token")
 		return
 	}
 
-	resp := DummyLoginResponse{Token: signed}
+	resp := TokenResponse{Token: token}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(ErrorResponse{
+		Code:    code,
+		Message: msg,
+	})
 }
