@@ -1,3 +1,3 @@
-module github.com/hronorog/avito-test-backend
+module github.com/hronorog/avito-test-test
 
 go 1.22.2
