@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,67 +10,57 @@ import (
 )
 
 type Schedule struct {
-	ID         uuid.UUID
-	RoomID     uuid.UUID
-	DaysOfWeek []int
-	StartTime  time.Time 
-	EndTime    time.Time
+    ID         uuid.UUID
+    RoomID     uuid.UUID
+    DaysOfWeek pq.Int64Array
+    StartTime  time.Time
+    EndTime    time.Time
 }
 
-func (r *Repo) CreateSchedule(ctx context.Context, roomID uuid.UUID, days []int, start, end time.Time) (*Schedule, error) {
-	// row := r.db.QueryRowContext(ctx, `
-	// 	INSERT INTO room_schedules (room_id, days_of_week, start_time, end_time)
-	// 	VALUES ($1, $2, $3, $4)
-	// 	RETURNING id, room_id, days_of_week, start_time, end_time
-	// `, roomID, pq.Array(days), start.Format("15:04:05"), end.Format("15:04:05"))
+func (r *Repo) CreateSchedule(ctx context.Context, roomID uuid.UUID, days []int, start, end time.Time,) (*Schedule, error) {
+    daysPg := make(pq.Int64Array, len(days))
+    for i, d := range days {
+        daysPg[i] = int64(d)
+    }
 
-	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO room_schedules (room_id, days_of_week, start_time, end_time)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, room_id, days_of_week, start_time, end_time
-	`, roomID, pq.Array(days), start.Format("15:04:05"), end.Format("15:04:05"))
+    row := r.db.QueryRowContext(ctx, `
+        INSERT INTO schedules (room_id, days_of_week, start_time, end_time)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, room_id, days_of_week, start_time, end_time
+    `, roomID, daysPg, start, end)
 
-	var s Schedule
-	var startStr, endStr string
-	if err := row.Scan(&s.ID, &s.RoomID, pq.Array(&s.DaysOfWeek), &startStr, &endStr); err != nil {
-		return nil, err
-	}
-
-	today := time.Now().Truncate(24 * time.Hour)
-	st, _ := time.Parse("15:04:05", startStr)
-	et, _ := time.Parse("15:04:05", endStr)
-	s.StartTime = time.Date(today.Year(), today.Month(), today.Day(), st.Hour(), st.Minute(), st.Second(), 0, time.UTC)
-	s.EndTime = time.Date(today.Year(), today.Month(), today.Day(), et.Hour(), et.Minute(), et.Second(), 0, time.UTC)
-
-	return &s, nil
+    var s Schedule
+    if err := row.Scan(
+        &s.ID,
+        &s.RoomID,
+        &s.DaysOfWeek,
+        &s.StartTime,
+        &s.EndTime,
+    ); err != nil {
+        return nil, err
+    }
+    return &s, nil
 }
 
 func (r *Repo) GetScheduleByRoomID(ctx context.Context, roomID uuid.UUID) (*Schedule, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, room_id, days_of_week, start_time, end_time
-		FROM room_schedules
-		WHERE room_id = $1
-	`, roomID)
+    row := r.db.QueryRowContext(ctx, `
+        SELECT id, room_id, days_of_week, start_time, end_time
+        FROM schedules
+        WHERE room_id = $1
+    `, roomID)
 
-	var s Schedule
-	var startStr, endStr string
-	var days pq.Int64Array
-
-	if err := row.Scan(&s.ID, &s.RoomID, &days, &startStr, &endStr); err != nil {
-		return nil, err
-	}
-
-	// конвертируем []int64 -> []int
-	s.DaysOfWeek = make([]int, len(days))
-	for i, v := range days {
-		s.DaysOfWeek[i] = int(v)
-	}
-
-	today := time.Now().Truncate(24 * time.Hour)
-	st, _ := time.Parse("15:04:05", startStr)
-	et, _ := time.Parse("15:04:05", endStr)
-	s.StartTime = time.Date(today.Year(), today.Month(), today.Day(), st.Hour(), st.Minute(), st.Second(), 0, time.UTC)
-	s.EndTime = time.Date(today.Year(), today.Month(), today.Day(), et.Hour(), et.Minute(), et.Second(), 0, time.UTC)
-
-	return &s, nil
+    var s Schedule
+    if err := row.Scan(
+        &s.ID,
+        &s.RoomID,
+        &s.DaysOfWeek,
+        &s.StartTime,
+        &s.EndTime,
+    ); err != nil {
+        if err == sql.ErrNoRows {
+            return nil, nil
+        }
+        return nil, err
+    }
+    return &s, nil
 }

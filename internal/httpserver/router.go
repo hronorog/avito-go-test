@@ -290,14 +290,19 @@ func listRoomsHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 }
 
 func scheduleToDTO(s repo.Schedule) ScheduleDTO {
-	return ScheduleDTO{
-		ID:         s.ID.String(),
-		RoomID:     s.RoomID.String(),
-		DaysOfWeek: s.DaysOfWeek,
-		StartTime:  s.StartTime.Format("15:04"),
-		EndTime:    s.EndTime.Format("15:04"),
-	}
+    days := make([]int, len(s.DaysOfWeek))
+    for i, d := range s.DaysOfWeek {
+        days[i] = int(d)
+    }
+
+    return ScheduleDTO{
+        RoomID:     s.RoomID.String(),
+        DaysOfWeek: days,
+        StartTime:  s.StartTime,
+        EndTime:    s.EndTime,
+    }
 }
+
 
 func scheduleCreateHandler(w http.ResponseWriter, r *http.Request, s *service.Service, roomIDStr string) {
 	if r.Method != http.MethodPost {
