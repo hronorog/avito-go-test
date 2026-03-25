@@ -70,3 +70,8 @@ func (s *Service) CreateBookingBySlotID(ctx context.Context, slotID, userID uuid
 
 	return b, slot.RoomID, nil
 }
+
+func (s *Service) ListMyBookings(ctx context.Context, userID uuid.UUID) ([]repo.BookingWithSlot, error) {
+	return s.repo.ListUserFutureBookings(ctx, userID)
+}
+

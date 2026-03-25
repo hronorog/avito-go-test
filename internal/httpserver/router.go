@@ -133,6 +133,10 @@ func New(db *sql.DB) http.Handler {
 		createBookingHandler(w, r, s)
 	})
 
+	mux.HandleFunc("/bookings/my", func(w http.ResponseWriter, r *http.Request) {
+		myBookingsHandler(w, r, s)
+	})
+
 	return auth.Middleware(mux)
 }
 
@@ -400,21 +404,14 @@ func slotsListHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 }
 
 func bookingToDTO(b *repo.Booking) BookingDTO {
-	var cancelled *string
-	if b.CancelledAt != nil {
-		s := b.CancelledAt.UTC().Format(time.RFC3339)
-		cancelled = &s
-	}
-	_ = cancelled 
-
-	return BookingDTO{
-		ID:             b.ID.String(),
-		SlotID:         b.SlotID.String(),
-		UserID:         b.UserID.String(),
-		Status:         b.Status,        
-		ConferenceLink: nil,             
-		CreatedAt:      b.CreatedAt.UTC().Format(time.RFC3339),
-	}
+    return BookingDTO{
+        ID:             b.ID.String(),
+        SlotID:         b.SlotID.String(),
+        UserID:         b.UserID.String(),
+        Status:         b.Status,
+        ConferenceLink: nil,
+        CreatedAt:      b.CreatedAt.UTC().Format(time.RFC3339),
+    }
 }
 
 func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Service) {
@@ -484,3 +481,47 @@ func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Ser
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+func myBookingsHandler(w http.ResponseWriter, r *http.Request, s *service.Service) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return
+	}
+	if user.Role != "user" {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "only user role allowed")
+		return
+	}
+
+	userID, err := uuid.Parse(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "invalid user id in token")
+		return
+	}
+
+	items, err := s.ListMyBookings(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list bookings")
+		return
+	}
+
+	bookings := make([]BookingDTO, 0, len(items))
+	for _, b := range items {
+		bookings = append(bookings, bookingToDTO(&b.Booking))
+	}
+
+	resp := struct {
+		Bookings []BookingDTO `json:"bookings"`
+	}{
+		Bookings: bookings,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+

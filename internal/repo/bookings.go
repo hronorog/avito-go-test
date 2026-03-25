@@ -34,6 +34,12 @@ type SlotWithRoom struct {
 	Status  string
 }
 
+type BookingWithSlot struct {
+	Booking
+	SlotStart time.Time
+	SlotEnd   time.Time
+}
+
 func (r *Repo) FindOrCreateSlot(ctx context.Context, roomID uuid.UUID, start, end time.Time,) (*SlotRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO slots (room_id, start_at, end_at, status)
@@ -153,4 +159,36 @@ func (r *Repo) BookExistingSlot( ctx context.Context, slotID, userID uuid.UUID,)
 		return nil, err
 	}
 	return &b, nil
+}
+
+func (r *Repo) ListUserFutureBookings(ctx context.Context, userID uuid.UUID) ([]BookingWithSlot, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT b.id, b.slot_id, b.user_id, b.status, b.created_at, b.cancelled_at,
+		       s.start_at, s.end_at
+		FROM bookings b
+		JOIN slots s ON s.id = b.slot_id
+		WHERE b.user_id = $1
+		  AND s.start_at >= now()
+		ORDER BY s.start_at ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var res []BookingWithSlot
+	for rows.Next() {
+		var b BookingWithSlot
+		if err := rows.Scan(
+			&b.ID, &b.SlotID, &b.UserID, &b.Status, &b.CreatedAt, &b.CancelledAt,
+			&b.SlotStart, &b.SlotEnd,
+		); err != nil {
+			return nil, err
+		}
+		res = append(res, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
