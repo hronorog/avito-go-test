@@ -1,13 +1,9 @@
 package httpserver
 
 import (
-	// debug
-	"log"
-	//
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	// "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -347,9 +343,6 @@ func scheduleCreateHandler(w http.ResponseWriter, r *http.Request, s *service.Se
 
 	schedule, err := s.CreateSchedule(r.Context(), roomID, req.DaysOfWeek, start, end)
 	if err != nil {
-		// debug
-		log.Printf("CreateSchedule error: %v", err)
-		//
 		switch err {
 		case service.ErrInvalidRequest:
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
@@ -408,7 +401,6 @@ func slotsListHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 
 	slots, err := s.ListSlotsForRoomDate(r.Context(), roomID, date)
 	if err != nil {
-		log.Printf("ListSlotsForRoomDate error: %v", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list slots")
 		return
 	}

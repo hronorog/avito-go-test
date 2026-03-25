@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	// "github.com/hronorog/avito-go-test/internal/repo"
 )
 
 type Slot struct {
