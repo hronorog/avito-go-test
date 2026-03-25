@@ -61,14 +61,14 @@ type ScheduleDTO struct {
 	ID           string `json:"id"`
 	RoomID       string `json:"roomId"`
 	DaysOfWeek []int    `json:"daysOfWeek"`
-	StartTime    string `json:"startTime"` // "HH:MM"
-	EndTime      string `json:"endTime"`   // "HH:MM"
+	StartTime    string `json:"startTime"` 
+	EndTime      string `json:"endTime"`   
 }
 
 type CreateScheduleRequest struct {
 	DaysOfWeek []int    `json:"daysOfWeek"`
-	StartTime    string `json:"startTime"` // "HH:MM"
-	EndTime      string `json:"endTime"`   // "HH:MM"
+	StartTime    string `json:"startTime"` 
+	EndTime      string `json:"endTime"`  
 }
 
 type CreateBookingRequest struct {
@@ -296,12 +296,14 @@ func scheduleToDTO(s repo.Schedule) ScheduleDTO {
     }
 
     return ScheduleDTO{
+        ID:         s.ID.String(),
         RoomID:     s.RoomID.String(),
         DaysOfWeek: days,
-        StartTime:  s.StartTime,
-        EndTime:    s.EndTime,
+        StartTime:  s.StartTime.UTC().Format("15:04"),
+        EndTime:    s.EndTime.UTC().Format("15:04"),
     }
 }
+
 
 
 func scheduleCreateHandler(w http.ResponseWriter, r *http.Request, s *service.Service, roomIDStr string) {

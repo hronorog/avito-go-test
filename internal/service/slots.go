@@ -26,7 +26,7 @@ func (s *Service) ListSlotsForRoomDate(ctx context.Context, roomID uuid.UUID, da
 
 	allowed := false
 	for _, d := range sched.DaysOfWeek {
-		if d == weekday {
+		if int(d) == weekday {
 			allowed = true
 			break
 		}
