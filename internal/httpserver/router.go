@@ -70,6 +70,22 @@ type CreateScheduleRequest struct {
 	EndTime      string `json:"endTime"`   // "HH:MM"
 }
 
+type CreateBookingRequest struct {
+	RoomID    string `json:"roomId"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+}
+
+type BookingDTO struct {
+	ID        string  `json:"id"`
+	RoomID    string  `json:"roomId"`
+	SlotID    string  `json:"slotId"`
+	UserID    string  `json:"userId"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"createdAt"`
+	Cancelled *string `json:"cancelledAt,omitempty"`
+}
+
 func New(db *sql.DB) http.Handler {
 	rp := repo.New(db)
 	s := service.New(rp)
@@ -113,6 +129,10 @@ func New(db *sql.DB) http.Handler {
 	})
 	mux.HandleFunc("/rooms/list", func(w http.ResponseWriter, r *http.Request) {
 		listRoomsHandler(w, r, s)
+	})
+
+	mux.HandleFunc("/bookings/create", func(w http.ResponseWriter, r *http.Request) {
+		createBookingHandler(w, r, s)
 	})
 
 	return auth.Middleware(mux)
@@ -378,5 +398,97 @@ func slotsListHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func bookingToDTO(b *repo.Booking, roomID uuid.UUID) BookingDTO {
+	var cancelled *string
+	if b.CancelledAt != nil {
+		s := b.CancelledAt.UTC().Format(time.RFC3339)
+		cancelled = &s
+	}
+	return BookingDTO{
+		ID:        b.ID.String(),
+		RoomID:    roomID.String(),
+		SlotID:    b.SlotID.String(),
+		UserID:    b.UserID.String(),
+		Status:    b.Status,
+		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339),
+		Cancelled: cancelled,
+	}
+}
+
+func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Service) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth")
+		return
+	}
+	if user.Role != "user" {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "user role required")
+		return
+	}
+
+	var req CreateBookingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json")
+		return
+	}
+
+	roomID, err := uuid.Parse(req.RoomID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid roomId")
+		return
+	}
+
+	start, err := time.Parse(time.RFC3339, req.StartTime)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid startTime")
+		return
+	}
+	end, err := time.Parse(time.RFC3339, req.EndTime)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid endTime")
+		return
+	}
+
+	userID, err := uuid.Parse(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "invalid user id in token")
+		return
+	}
+
+	b, err := s.CreateBooking(r.Context(), roomID, userID, start, end)
+	if err != nil {
+		switch err {
+		case service.ErrInvalidRequest:
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		case service.ErrSlotInPast:
+			writeError(w, http.StatusBadRequest, "SLOT_IN_PAST", "slot in past")
+			return
+		case service.ErrSlotAlreadyBooked:
+			writeError(w, http.StatusConflict, "SLOT_ALREADY_BOOKED", "slot already booked")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create booking")
+			return
+		}
+	}
+
+	dto := bookingToDTO(b, roomID)
+	resp := struct {
+		Booking BookingDTO `json:"booking"`
+	}{
+		Booking: dto,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
 }
