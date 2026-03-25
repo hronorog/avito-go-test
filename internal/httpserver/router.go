@@ -1,14 +1,20 @@
 package httpserver
 
 import (
+	// debug
+	"log"
+	//
 	"database/sql"
 	"encoding/json"
-	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/hronorog/avito-go-test/internal/auth"
 	"github.com/hronorog/avito-go-test/internal/repo"
 	"github.com/hronorog/avito-go-test/internal/service"
+
+	"github.com/google/uuid"
 )
 
 
@@ -38,6 +44,19 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+type ScheduleDTO struct {
+	ID         string `json:"id"`
+	RoomID     string `json:"roomId"`
+	DaysOfWeek []int  `json:"daysOfWeek"`
+	StartTime  string `json:"startTime"` // "HH:MM"
+	EndTime    string `json:"endTime"`   // "HH:MM"
+}
+
+type CreateScheduleRequest struct {
+	DaysOfWeek []int  `json:"daysOfWeek"`
+	StartTime  string `json:"startTime"` // "HH:MM"
+	EndTime    string `json:"endTime"`   // "HH:MM"
+}
 
 func New(db *sql.DB) http.Handler {
 	rp := repo.New(db)
@@ -55,6 +74,18 @@ func New(db *sql.DB) http.Handler {
 	})
 
 	mux.HandleFunc("/dummyLogin", dummyLoginHandler)
+
+	mux.HandleFunc("/rooms/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[1] == "schedule" && parts[2] == "create" {
+			roomIDStr := parts[0]
+			scheduleCreateHandler(w, r, s, roomIDStr)
+			return
+		}
+
+		http.NotFound(w, r)
+	})
 
 	mux.HandleFunc("/rooms/create", func(w http.ResponseWriter, r *http.Request) {
 		createRoomHandler(w, r, s)
@@ -139,20 +170,8 @@ func createRoomHandler(w http.ResponseWriter, r *http.Request, s *service.Servic
 		return
 	}
 
-	// room, err := s.CreateRoom(r.Context(), req.Name, req.Description, req.Capacity)
-	// if err != nil {
-	// 	if err == service.ErrInvalidRequest {
-	// 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-	// 		return
-	// 	}
-	// 	writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create room")
-	// 	return
-	// }
-
 	room, err := s.CreateRoom(r.Context(), req.Name, req.Description, req.Capacity)
 	if err != nil {
-		log.Printf("CreateRoom error: %v", err) // временный лог
-
 		if err == service.ErrInvalidRequest {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
@@ -160,7 +179,6 @@ func createRoomHandler(w http.ResponseWriter, r *http.Request, s *service.Servic
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create room")
 		return
 	}
-
 
 	resp := struct {
 		Room RoomDTO `json:"room"`
@@ -205,5 +223,83 @@ func listRoomsHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func scheduleToDTO(s repo.Schedule) ScheduleDTO {
+	return ScheduleDTO{
+		ID:         s.ID.String(),
+		RoomID:     s.RoomID.String(),
+		DaysOfWeek: s.DaysOfWeek,
+		StartTime:  s.StartTime.Format("15:04"),
+		EndTime:    s.EndTime.Format("15:04"),
+	}
+}
+
+func scheduleCreateHandler(w http.ResponseWriter, r *http.Request, s *service.Service, roomIDStr string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth")
+		return
+	}
+	if user.Role != "admin" {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "admin role required")
+		return
+	}
+
+	roomID, err := uuid.Parse(roomIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid room id")
+		return
+	}
+
+	var req CreateScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json")
+		return
+	}
+
+	start, err := time.Parse("15:04", req.StartTime)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid startTime")
+		return
+	}
+	end, err := time.Parse("15:04", req.EndTime)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid endTime")
+		return
+	}
+
+	schedule, err := s.CreateSchedule(r.Context(), roomID, req.DaysOfWeek, start, end)
+	if err != nil {
+		// debug
+		log.Printf("CreateSchedule error: %v", err)
+		//
+		switch err {
+		case service.ErrInvalidRequest:
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		case service.ErrScheduleExists:
+			writeError(w, http.StatusConflict, "SCHEDULE_EXISTS", "schedule already exists")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create schedule")
+			return
+		}
+	}
+
+	resp := struct {
+		Schedule ScheduleDTO `json:"schedule"`
+	}{
+		Schedule: scheduleToDTO(*schedule),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
 }
