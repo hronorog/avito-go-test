@@ -40,6 +40,10 @@ type BookingWithSlot struct {
 	SlotEnd   time.Time
 }
 
+type BookingWithUser struct {
+	Booking
+}
+
 func (r *Repo) FindOrCreateSlot(ctx context.Context, roomID uuid.UUID, start, end time.Time,) (*SlotRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO slots (room_id, start_at, end_at, status)
@@ -191,4 +195,100 @@ func (r *Repo) ListUserFutureBookings(ctx context.Context, userID uuid.UUID) ([]
 		return nil, err
 	}
 	return res, nil
+}
+
+func (r *Repo) GetBookingByID(ctx context.Context, id uuid.UUID) (*Booking, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, slot_id, user_id, status, created_at, cancelled_at
+		FROM bookings
+		WHERE id = $1
+	`, id)
+
+	var b Booking
+	if err := row.Scan(&b.ID, &b.SlotID, &b.UserID, &b.Status, &b.CreatedAt, &b.CancelledAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrBookingNotFound
+		}
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (r *Repo) CancelBooking(ctx context.Context, bookingID uuid.UUID) (*Booking, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var b Booking
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, slot_id, user_id, status, created_at, cancelled_at
+		FROM bookings
+		WHERE id = $1
+		FOR UPDATE
+	`, bookingID).Scan(&b.ID, &b.SlotID, &b.UserID, &b.Status, &b.CreatedAt, &b.CancelledAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrBookingNotFound
+		}
+		return nil, err
+	}
+
+	if b.Status != "cancelled" {
+		now := time.Now().UTC()
+		_, err = tx.ExecContext(ctx, `
+			UPDATE bookings
+			SET status = 'cancelled', cancelled_at = $2
+			WHERE id = $1
+		`, bookingID, now)
+		if err != nil {
+			return nil, err
+		}
+		b.Status = "cancelled"
+		b.CancelledAt = &now
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (r *Repo) ListAllBookings(ctx context.Context, limit, offset int) ([]Booking, int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, slot_id, user_id, status, created_at, cancelled_at
+		FROM bookings
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var res []Booking
+	for rows.Next() {
+		var b Booking
+		if err := rows.Scan(
+			&b.ID,
+			&b.SlotID,
+			&b.UserID,
+			&b.Status,
+			&b.CreatedAt,
+			&b.CancelledAt,
+		); err != nil {
+			return nil, 0, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var total int64
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bookings`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	return res, total, nil
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	// "net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,13 @@ type BookingDTO struct {
 	CreatedAt      string  `json:"createdAt"`
 }
 
+type PaginationDTO struct {
+	Page     int   `json:"page"`
+	PageSize int   `json:"pageSize"`
+	Total    int64 `json:"total"`
+}
+
+
 func New(db *sql.DB) http.Handler {
 	rp := repo.New(db)
 	s := service.New(rp)
@@ -135,6 +143,18 @@ func New(db *sql.DB) http.Handler {
 
 	mux.HandleFunc("/bookings/my", func(w http.ResponseWriter, r *http.Request) {
 		myBookingsHandler(w, r, s)
+	})
+
+	mux.HandleFunc("/bookings/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/cancel") {
+			cancelBookingHandler(w, r, s)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	mux.HandleFunc("/bookings/list", func(w http.ResponseWriter, r *http.Request) {
+		listBookingsHandler(w, r, s)
 	})
 
 	return auth.Middleware(mux)
@@ -525,3 +545,125 @@ func myBookingsHandler(w http.ResponseWriter, r *http.Request, s *service.Servic
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func cancelBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Service) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return
+	}
+	if user.Role != "user" {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "only user role allowed")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "bookings" || parts[2] != "cancel" {
+		http.NotFound(w, r)
+		return
+	}
+	bookingIDStr := parts[1]
+
+	bookingID, err := uuid.Parse(bookingIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid bookingId")
+		return
+	}
+
+	userID, err := uuid.Parse(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "invalid user id in token")
+		return
+	}
+
+	b, err := s.CancelMyBooking(r.Context(), bookingID, userID)
+	if err != nil {
+		switch err {
+		case service.ErrBookingNotFound:
+			writeError(w, http.StatusNotFound, "BOOKING_NOT_FOUND", "booking not found")
+			return
+		case service.ErrForbiddenBooking:
+			writeError(w, http.StatusForbidden, "FORBIDDEN", "cannot cancel another user's booking")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to cancel booking")
+			return
+		}
+	}
+
+	dto := bookingToDTO(b)
+	resp := struct {
+		Booking BookingDTO `json:"booking"`
+	}{
+		Booking: dto,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func listBookingsHandler(w http.ResponseWriter, r *http.Request, s *service.Service) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return
+	}
+	if user.Role != "admin" {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "only admin allowed")
+		return
+	}
+
+	q := r.URL.Query()
+	page := parseIntWithDefault(q.Get("page"), 1)
+	pageSize := parseIntWithDefault(q.Get("pageSize"), 20)
+	if page < 1 || pageSize < 1 {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid pagination params")
+		return
+	}
+
+	items, total, err := s.ListAllBookings(r.Context(), page, pageSize)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list bookings")
+		return
+	}
+
+	bookings := make([]BookingDTO, 0, len(items))
+	for _, b := range items {
+		bookings = append(bookings, bookingToDTO(&b))
+	}
+
+	resp := struct {
+		Bookings   []BookingDTO  `json:"bookings"`
+		Pagination PaginationDTO `json:"pagination"`
+	}{
+		Bookings: bookings,
+		Pagination: PaginationDTO{
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func parseIntWithDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
