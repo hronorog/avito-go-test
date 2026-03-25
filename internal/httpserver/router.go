@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	// "net/url"
 	"strings"
 	"time"
 
@@ -19,16 +20,27 @@ import (
 
 
 type RoomDTO struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	Capacity    *int    `json:"capacity,omitempty"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Description *string  `json:"description,omitempty"`
+	Capacity    *int     `json:"capacity,omitempty"`
+}
+
+type SlotDTO struct {
+	StartTime  string  `json:"startTime"`
+	EndTime    string  `json:"endTime"`
+	Status     string  `json:"status"`
+	BookingID *string  `json:"bookingId,omitempty"`
+}
+
+type SlotsListResponse struct {
+	Slots []SlotDTO `json:"slots"`
 }
 
 type CreateRoomRequest struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description"`
-	Capacity    *int    `json:"capacity"`
+	Name         string  `json:"name"`
+	Description *string  `json:"description"`
+	Capacity    *int     `json:"capacity"`
 }
 
 type DummyLoginRequest struct {
@@ -45,17 +57,17 @@ type ErrorResponse struct {
 }
 
 type ScheduleDTO struct {
-	ID         string `json:"id"`
-	RoomID     string `json:"roomId"`
-	DaysOfWeek []int  `json:"daysOfWeek"`
-	StartTime  string `json:"startTime"` // "HH:MM"
-	EndTime    string `json:"endTime"`   // "HH:MM"
+	ID           string `json:"id"`
+	RoomID       string `json:"roomId"`
+	DaysOfWeek []int    `json:"daysOfWeek"`
+	StartTime    string `json:"startTime"` // "HH:MM"
+	EndTime      string `json:"endTime"`   // "HH:MM"
 }
 
 type CreateScheduleRequest struct {
-	DaysOfWeek []int  `json:"daysOfWeek"`
-	StartTime  string `json:"startTime"` // "HH:MM"
-	EndTime    string `json:"endTime"`   // "HH:MM"
+	DaysOfWeek []int    `json:"daysOfWeek"`
+	StartTime    string `json:"startTime"` // "HH:MM"
+	EndTime      string `json:"endTime"`   // "HH:MM"
 }
 
 func New(db *sql.DB) http.Handler {
@@ -78,9 +90,18 @@ func New(db *sql.DB) http.Handler {
 	mux.HandleFunc("/rooms/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/rooms/")
 		parts := strings.Split(path, "/")
+
+		// /rooms/{roomId}/schedule/create
 		if len(parts) == 3 && parts[1] == "schedule" && parts[2] == "create" {
 			roomIDStr := parts[0]
 			scheduleCreateHandler(w, r, s, roomIDStr)
+			return
+		}
+
+		// /rooms/{roomId}/slots/list
+		if len(parts) == 3 && parts[1] == "slots" && parts[2] == "list" {
+			roomIDStr := parts[0]
+			slotsListHandler(w, r, s, roomIDStr)
 			return
 		}
 
@@ -301,5 +322,61 @@ func scheduleCreateHandler(w http.ResponseWriter, r *http.Request, s *service.Se
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func slotsListHandler(w http.ResponseWriter, r *http.Request, s *service.Service, roomIDStr string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth")
+		return
+	}
+	_ = user 
+
+	roomID, err := uuid.Parse(roomIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid room id")
+		return
+	}
+
+	q := r.URL.Query()
+	dateStr := q.Get("date")
+	if dateStr == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "date is required")
+		return
+	}
+
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid date")
+		return
+	}
+
+	slots, err := s.ListSlotsForRoomDate(r.Context(), roomID, date)
+	if err != nil {
+		log.Printf("ListSlotsForRoomDate error: %v", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list slots")
+		return
+	}
+
+	dtos := make([]SlotDTO, 0, len(slots))
+	for _, sl := range slots {
+		dtos = append(dtos, SlotDTO{
+			StartTime: sl.Start.UTC().Format(time.RFC3339),
+			EndTime:   sl.End.UTC().Format(time.RFC3339),
+			Status:    "FREE",
+			BookingID: nil,
+		})
+	}
+
+	resp := SlotsListResponse{Slots: dtos}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
