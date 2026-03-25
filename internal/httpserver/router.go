@@ -71,19 +71,17 @@ type CreateScheduleRequest struct {
 }
 
 type CreateBookingRequest struct {
-	RoomID    string `json:"roomId"`
-	StartTime string `json:"startTime"`
-	EndTime   string `json:"endTime"`
+	SlotID              string `json:"slotId"`
+	CreateConferenceLink bool   `json:"createConferenceLink"`
 }
 
 type BookingDTO struct {
-	ID        string  `json:"id"`
-	RoomID    string  `json:"roomId"`
-	SlotID    string  `json:"slotId"`
-	UserID    string  `json:"userId"`
-	Status    string  `json:"status"`
-	CreatedAt string  `json:"createdAt"`
-	Cancelled *string `json:"cancelledAt,omitempty"`
+	ID             string  `json:"id"`
+	SlotID         string  `json:"slotId"`
+	UserID         string  `json:"userId"`
+	Status         string  `json:"status"`
+	ConferenceLink *string `json:"conferenceLink"`
+	CreatedAt      string  `json:"createdAt"`
 }
 
 func New(db *sql.DB) http.Handler {
@@ -401,20 +399,21 @@ func slotsListHandler(w http.ResponseWriter, r *http.Request, s *service.Service
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func bookingToDTO(b *repo.Booking, roomID uuid.UUID) BookingDTO {
+func bookingToDTO(b *repo.Booking) BookingDTO {
 	var cancelled *string
 	if b.CancelledAt != nil {
 		s := b.CancelledAt.UTC().Format(time.RFC3339)
 		cancelled = &s
 	}
+	_ = cancelled 
+
 	return BookingDTO{
-		ID:        b.ID.String(),
-		RoomID:    roomID.String(),
-		SlotID:    b.SlotID.String(),
-		UserID:    b.UserID.String(),
-		Status:    b.Status,
-		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339),
-		Cancelled: cancelled,
+		ID:             b.ID.String(),
+		SlotID:         b.SlotID.String(),
+		UserID:         b.UserID.String(),
+		Status:         b.Status,        
+		ConferenceLink: nil,             
+		CreatedAt:      b.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -426,11 +425,11 @@ func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Ser
 
 	user, ok := auth.FromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing auth")
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	if user.Role != "user" {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", "user role required")
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "booking allowed only for user role")
 		return
 	}
 
@@ -439,21 +438,14 @@ func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Ser
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json")
 		return
 	}
-
-	roomID, err := uuid.Parse(req.RoomID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid roomId")
+	if req.SlotID == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "slotId is required")
 		return
 	}
 
-	start, err := time.Parse(time.RFC3339, req.StartTime)
+	slotID, err := uuid.Parse(req.SlotID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid startTime")
-		return
-	}
-	end, err := time.Parse(time.RFC3339, req.EndTime)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid endTime")
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid slotId")
 		return
 	}
 
@@ -463,17 +455,17 @@ func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Ser
 		return
 	}
 
-	b, err := s.CreateBooking(r.Context(), roomID, userID, start, end)
+	booking, _, err := s.CreateBookingBySlotID(r.Context(), slotID, userID)
 	if err != nil {
 		switch err {
-		case service.ErrInvalidRequest:
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
 		case service.ErrSlotInPast:
-			writeError(w, http.StatusBadRequest, "SLOT_IN_PAST", "slot in past")
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "slot in past")
 			return
 		case service.ErrSlotAlreadyBooked:
-			writeError(w, http.StatusConflict, "SLOT_ALREADY_BOOKED", "slot already booked")
+			writeError(w, http.StatusConflict, "SLOT_ALREADY_BOOKED", "slot is already booked")
+			return
+		case service.ErrSlotNotFound:
+			writeError(w, http.StatusNotFound, "SLOT_NOT_FOUND", "slot not found")
 			return
 		default:
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create booking")
@@ -481,7 +473,7 @@ func createBookingHandler(w http.ResponseWriter, r *http.Request, s *service.Ser
 		}
 	}
 
-	dto := bookingToDTO(b, roomID)
+	dto := bookingToDTO(booking)
 	resp := struct {
 		Booking BookingDTO `json:"booking"`
 	}{
